@@ -1,4 +1,6 @@
+import re
 import shutil
+import sys
 import warnings
 import zipfile
 import plistlib
@@ -9,6 +11,17 @@ app_resource_dir = None
 app_bundle_executable = None
 hooking_library = None
 inject_dir_name = None
+
+
+def cleanup_and_exit():
+    # Check if directory exists and remove it
+    if os.path.exists("Payload"):
+        shutil.rmtree("Payload")
+    # Check if files exist and remove them
+    for file_name in ["ent.xml", "temp.zip"]:
+        if os.path.isfile(file_name):
+            os.remove(file_name)
+    sys.exit()
 
 
 def create_dir_in_zip(target_zip: str, dir_name_to_make: str):
@@ -111,7 +124,25 @@ def fix_tweak(target_tweak: str, fix_what: str):
         # Specify the command you want to run
         command = ["install_name_tool", "-id", f"@executable_path/{inject_dir_name}/{target_tweak.rpartition('/')[-1]}", target_tweak]
     elif fix_what == 'LC_LOAD_DYLIB':
-        command = ["install_name_tool", "-change", "/Library/Frameworks/CydiaSubstrate.framework/CydiaSubstrate",
+        dylib_to_change = ""
+        subcommand = ["otool", "-L", target_tweak]
+        # Execute the subcommand and capture the output to find substrate dylib to change
+        subcommand_result = subprocess.run(subcommand, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if subcommand_result.returncode == 0:
+            matches = re.findall(r'(/[\w./-]+)', subcommand_result.stdout)
+            # Skipping the first match because it's the name of the main .dylib file
+            for match in matches[1:]:
+                if "substrate" in match.lower():
+                    dylib_to_change = match
+                    break
+            if dylib_to_change == "":
+                print("[*] Failed to find a substrate dylib to change")
+                cleanup_and_exit()
+        else:
+            print(f"[*] Failed to execute subcommand")
+            cleanup_and_exit()
+
+        command = ["install_name_tool", "-change", dylib_to_change,
                    f"@executable_path/{inject_dir_name}/{hooking_library}", target_tweak]
     # Execute the command and capture the output
     result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -203,5 +234,4 @@ if __name__ == '__main__':
     shutil.move(temp_zip_file, f"{app_bundle_executable}_injected.ipa")
 
     # clean up
-    shutil.rmtree("Payload")
-    os.remove("ent.xml")
+    cleanup_and_exit()

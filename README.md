@@ -12,12 +12,12 @@ Because this tool simply perform the following steps<br>
 
 # Prerequisites
 * macOS
-* ldid, install_name_tool, insert_dylib (somehow, on my Mac everything has already been installed. You can easily install these tools too. Google it)
+* otool, ldid, install_name_tool, insert_dylib (somehow, on my Mac everything has already been installed. You can easily install these tools too. Google it)
 
 # Usage
 python main.py<br>
 follow the instruction prompts<br>
-It will inject CydiaSubstrate or [libellekit.dylib](https://github.com/evelyneee/ellekit) as a hooking library, however it seems that libellekit.dylib not working on the jailed device
+It will inject CydiaSubstrate or [libellekit.dylib](https://github.com/evelyneee/ellekit) as a hooking library
 
 # Credits
 [Azule](https://github.com/Al4ise/Azule)
