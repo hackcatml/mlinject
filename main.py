@@ -74,6 +74,19 @@ def read_plist(target_zip: str) -> None:
                     app_bundle_executable = plist_data.get(key)
 
 
+def modify_plist(target_plist: str) -> None:
+    with open(target_plist, 'rb') as File:
+        plist_data = plistlib.load(File)
+
+    key = "UISupportedDevices"
+    if key in plist_data:
+        del plist_data[key]
+
+    with open(target_plist, 'wb') as File:
+        plistlib.dump(plist_data, File)
+        print(f"[*] {target_plist} key: {key} is removed successfully")
+
+
 def unzip(target_zip: str, target_file: str) -> None:
     # Open the zip file using 'with' statement
     with zipfile.ZipFile(target_zip, 'r') as zip_ref:
@@ -193,6 +206,17 @@ if __name__ == '__main__':
         else:
             print("Wrong hooking library number. Choose again")
 
+    while True:
+        UISupportedDevices_ans = input("\nRemove UISupportedDevices? [Y/n]: ")
+        UISupportedDevices_ans = UISupportedDevices_ans.lower().strip()
+        if UISupportedDevices_ans == "y" or UISupportedDevices_ans == "yes":
+            UISupportedDevices_ans = True
+        else:
+            UISupportedDevices_ans = False
+        break
+
+    # notify dylib injection start
+    print(f"\n[*] {targetTweak.rpartition('/')[-1]} injection start")
     # create temp zip file
     temp_zip_file = "temp.zip"
     if shutil.copy2(targetZip, temp_zip_file) is not None:
@@ -201,6 +225,13 @@ if __name__ == '__main__':
 
     # read Info.plist to get some infos
     read_plist(temp_zip_file)
+
+    # remove UISupportedDevices
+    if UISupportedDevices_ans is True:
+        info_plist_file = f"{app_resource_dir}/Info.plist"
+        unzip(temp_zip_file, info_plist_file)
+        modify_plist(info_plist_file)
+        add_file_to_zip(temp_zip_file, info_plist_file, f"{app_resource_dir}")
 
     # work for app's main executable
     app_main_executable = f"{app_resource_dir}/{app_bundle_executable}"
