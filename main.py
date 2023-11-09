@@ -74,17 +74,26 @@ def read_plist(target_zip: str) -> None:
                     app_bundle_executable = plist_data.get(key)
 
 
-def modify_plist(target_plist: str) -> None:
-    with open(target_plist, 'rb') as File:
-        plist_data = plistlib.load(File)
+def modify_plist(target_plist: str, UISupportedDevices: bool, MinimumOSVersion: bool) -> None:
+    if (UISupportedDevices is True) or (MinimumOSVersion is True):
+        with open(target_plist, 'rb') as File:
+            plist_data = plistlib.load(File)
 
-    key = "UISupportedDevices"
-    if key in plist_data:
-        del plist_data[key]
+        if UISupportedDevices is True:
+            key = "UISupportedDevices"
+            if key in plist_data:
+                del plist_data[key]
+                print(f"[*] {target_plist} key: {key} is removed successfully")
+        
+        if MinimumOSVersion is True:
+            key = "MinimumOSVersion"
+            if key in plist_data:
+                origin_version = plist_data[key]
+                plist_data[key] = '12.0'
+                print(f"[*] {target_plist} key: {key} is changed to 12.0 from {origin_version} successfully")
 
-    with open(target_plist, 'wb') as File:
-        plistlib.dump(plist_data, File)
-        print(f"[*] {target_plist} key: {key} is removed successfully")
+        with open(target_plist, 'wb') as File:
+            plistlib.dump(plist_data, File)
 
 
 def unzip(target_zip: str, target_file: str) -> None:
@@ -169,7 +178,7 @@ def fix_tweak(target_tweak: str, fix_what: str):
 if __name__ == '__main__':
     # Get user input for the target IPA
     while True:
-        targetZip = input("Target decrypted ipa (full or relative path): ").strip()
+        targetZip = input("Target decrypted ipa (full or relative path): ").strip().replace('"', '').replace('\'', '')
         if os.path.exists(targetZip):
             break
         else:
@@ -177,7 +186,7 @@ if __name__ == '__main__':
 
     # get user input of the target tweak
     while True:
-        targetTweak = input("Target tweak dylib to inject (full or relative path): ").strip()
+        targetTweak = input("Target tweak dylib to inject (full or relative path): ").strip().replace('"', '').replace('\'', '')
         if os.path.exists(targetTweak):
             break
         else:
@@ -215,6 +224,15 @@ if __name__ == '__main__':
             UISupportedDevices_ans = False
         break
 
+    while True:
+        MinimumOSVersion_ans = input("\nChange MinimumOSVersion to 12.0? [Y/n]: ")
+        MinimumOSVersion_ans = MinimumOSVersion_ans.lower().strip()
+        if MinimumOSVersion_ans == "y" or MinimumOSVersion_ans == "yes":
+            MinimumOSVersion_ans = True
+        else:
+            MinimumOSVersion_ans = False
+        break
+
     # notify dylib injection start
     print(f"\n[*] {targetTweak.rpartition('/')[-1]} injection start")
     # create temp zip file
@@ -227,11 +245,10 @@ if __name__ == '__main__':
     read_plist(temp_zip_file)
 
     # remove UISupportedDevices
-    if UISupportedDevices_ans is True:
-        info_plist_file = f"{app_resource_dir}/Info.plist"
-        unzip(temp_zip_file, info_plist_file)
-        modify_plist(info_plist_file)
-        add_file_to_zip(temp_zip_file, info_plist_file, f"{app_resource_dir}")
+    info_plist_file = f"{app_resource_dir}/Info.plist"
+    unzip(temp_zip_file, info_plist_file)
+    modify_plist(info_plist_file, UISupportedDevices_ans, MinimumOSVersion_ans)
+    add_file_to_zip(temp_zip_file, info_plist_file, f"{app_resource_dir}")
 
     # work for app's main executable
     app_main_executable = f"{app_resource_dir}/{app_bundle_executable}"
