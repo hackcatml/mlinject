@@ -186,8 +186,16 @@ if __name__ == '__main__':
 
     # get user input of the target tweak
     while True:
-        targetTweak = input("Target tweak dylib to inject (full or relative path): ").strip().replace('"', '').replace('\'', '')
-        if os.path.exists(targetTweak):
+        targetTweaks = [input("Target tweak dylib to inject (full or relative path): ").strip().replace('"', '').replace('\'', '')]
+        if os.path.exists(targetTweaks[0]):
+            while True:
+                another_tweak_ans = input("Another? [Y/n]: ").lower().strip()
+                if another_tweak_ans == "y" or another_tweak_ans == "yes":
+                    another_tweak_ans = True
+                    targetTweaks.append(input("Target tweak dylib to inject (full or relative path): ").strip().replace('"', '').replace('\'', ''))
+                else:
+                    another_tweak_ans = False
+                    break
             break
         else:
             print("[!] Specified tweak is not exists\n")
@@ -234,7 +242,8 @@ if __name__ == '__main__':
         break
 
     # notify dylib injection start
-    print(f"\n[*] {targetTweak.rpartition('/')[-1]} injection start")
+    for targetTweak in targetTweaks:
+        print(f"\n[*] {targetTweak.rpartition('/')[-1]} injection start")
     # create temp zip file
     temp_zip_file = "temp.zip"
     if shutil.copy2(targetZip, temp_zip_file) is not None:
@@ -244,7 +253,7 @@ if __name__ == '__main__':
     # read Info.plist to get some infos
     read_plist(temp_zip_file)
 
-    # remove UISupportedDevices
+    # remove UISupportedDevices, change MinimumOSVersion if we want
     info_plist_file = f"{app_resource_dir}/Info.plist"
     unzip(temp_zip_file, info_plist_file)
     modify_plist(info_plist_file, UISupportedDevices_ans, MinimumOSVersion_ans)
@@ -258,7 +267,8 @@ if __name__ == '__main__':
     # remove code signature of the app's main executable
     ldid_work(app_main_executable, "remove")
     # Insert dylib into the app's main executable and add the file to the zip
-    insert_dylib(app_main_executable, targetTweak.rpartition('/')[-1])
+    for targetTweak in targetTweaks:
+        insert_dylib(app_main_executable, targetTweak.rpartition('/')[-1])
     # restore entitlements of the app's main executable
     ldid_work(app_main_executable, "restore")
     add_file_to_zip(temp_zip_file, app_main_executable, f"{app_resource_dir}")
@@ -269,16 +279,20 @@ if __name__ == '__main__':
     # add hooking library in the zip file
     add_file_to_zip(temp_zip_file, inject_lib, hooking_lib_dir_to_make)
     # add tweak dylib in the zip file
-    add_file_to_zip(temp_zip_file, targetTweak, hooking_lib_dir_to_make)
+    for targetTweak in targetTweaks:
+        add_file_to_zip(temp_zip_file, targetTweak, hooking_lib_dir_to_make)
     # unzip it
     unzip(temp_zip_file, f"{hooking_lib_dir_to_make}")
-    # remove code signature of the tweak dylib
-    ldid_work(f"{hooking_lib_dir_to_make}{targetTweak.rpartition('/')[-1]}", "remove")
-    # fix LC_ID_DYLIB, LO_LOAD_DYLIB of the tweak dylib
-    fix_tweak(f"{hooking_lib_dir_to_make}{targetTweak.rpartition('/')[-1]}", "LC_ID_DYLIB")
-    fix_tweak(f"{hooking_lib_dir_to_make}{targetTweak.rpartition('/')[-1]}", "LC_LOAD_DYLIB")
-    # add the fixed tweak in the zip file
-    add_file_to_zip(temp_zip_file, f"{hooking_lib_dir_to_make}{targetTweak.rpartition('/')[-1]}", hooking_lib_dir_to_make)
+
+    for targetTweak in targetTweaks:
+        # remove code signature of the tweak dylib
+        ldid_work(f"{hooking_lib_dir_to_make}{targetTweak.rpartition('/')[-1]}", "remove")
+        # fix LC_ID_DYLIB, LO_LOAD_DYLIB of the tweak dylib
+        fix_tweak(f"{hooking_lib_dir_to_make}{targetTweak.rpartition('/')[-1]}", "LC_ID_DYLIB")
+        fix_tweak(f"{hooking_lib_dir_to_make}{targetTweak.rpartition('/')[-1]}", "LC_LOAD_DYLIB")
+        # add the fixed tweak in the zip file
+        add_file_to_zip(temp_zip_file, f"{hooking_lib_dir_to_make}{targetTweak.rpartition('/')[-1]}", hooking_lib_dir_to_make)
+
     shutil.move(temp_zip_file, f"{app_bundle_executable}_injected.ipa")
 
     # clean up
