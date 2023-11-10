@@ -9,6 +9,7 @@ import os
 
 app_resource_dir = None
 app_bundle_executable = None
+app_version = None
 hooking_library = None
 inject_dir_name = None
 
@@ -69,9 +70,10 @@ def read_plist(target_zip: str) -> None:
                 with open(file, 'rb') as File:
                     plist_data = plistlib.load(File)
                     # Access a specific value using the key
-                    key = "CFBundleExecutable"
-                    global app_bundle_executable
-                    app_bundle_executable = plist_data.get(key)
+                    keys = ["CFBundleExecutable", "CFBundleShortVersionString"]
+                    global app_bundle_executable, app_version
+                    app_bundle_executable = plist_data.get(keys[0])
+                    app_version = plist_data.get(keys[1])
 
 
 def modify_plist(target_plist: str, UISupportedDevices: bool, MinimumOSVersion: bool) -> None:
@@ -191,10 +193,12 @@ if __name__ == '__main__':
             while True:
                 another_tweak_ans = input("Another? [Y/n]: ").lower().strip()
                 if another_tweak_ans == "y" or another_tweak_ans == "yes":
-                    another_tweak_ans = True
-                    targetTweaks.append(input("Target tweak dylib to inject (full or relative path): ").strip().replace('"', '').replace('\'', ''))
+                    another_tweak_path = input("Target tweak dylib to inject (full or relative path): ").strip().replace('"', '').replace('\'', '')
+                    if os.path.exists(another_tweak_path):
+                        targetTweaks.append(another_tweak_path)
+                    else:
+                        print("[!] Specified tweak is not exists\n")
                 else:
-                    another_tweak_ans = False
                     break
             break
         else:
@@ -242,8 +246,9 @@ if __name__ == '__main__':
         break
 
     # notify dylib injection start
+    print("")
     for targetTweak in targetTweaks:
-        print(f"\n[*] {targetTweak.rpartition('/')[-1]} injection start")
+        print(f"[*] {targetTweak.rpartition('/')[-1]} injection start")
     # create temp zip file
     temp_zip_file = "temp.zip"
     if shutil.copy2(targetZip, temp_zip_file) is not None:
@@ -293,7 +298,7 @@ if __name__ == '__main__':
         # add the fixed tweak in the zip file
         add_file_to_zip(temp_zip_file, f"{hooking_lib_dir_to_make}{targetTweak.rpartition('/')[-1]}", hooking_lib_dir_to_make)
 
-    shutil.move(temp_zip_file, f"{app_bundle_executable}_injected.ipa")
+    shutil.move(temp_zip_file, f"{app_bundle_executable}_v{app_version}_injected.ipa")
 
     # clean up
     cleanup_and_exit()
