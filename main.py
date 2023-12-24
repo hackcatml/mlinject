@@ -52,6 +52,8 @@ def add_file_to_zip(target_zip: str, file_to_insert: str, target_dir: str):
     with zipfile.ZipFile(target_zip, 'a') as zip_ref:
         if "CydiaSubstrate" in file_to_insert:
             add_directory_to_zip(zip_ref, file_to_insert, target_dir)
+        elif "CS" in file_to_insert:
+            add_directory_to_zip(zip_ref, file_to_insert, target_dir)
         else:
             arcname = os.path.join(target_dir, os.path.basename(file_to_insert))
             with warnings.catch_warnings():
@@ -112,7 +114,9 @@ def remove_file_and_rezip(zip_file_path, file_to_remove):
 
     # Remove the specified file
     file_path = os.path.join(temp_dir, file_to_remove)
-    if os.path.exists(file_path):
+    if os.path.isdir(file_path):
+        shutil.rmtree(file_path)
+    elif os.path.exists(file_path):
         os.remove(file_path)
 
     # Create a new zip file
@@ -235,10 +239,26 @@ def fix_tweak(target_tweak: str):
                 if size_to_pad >= 0:
                     pad_str = ''.join(["\x00"] * size_to_pad)
                 else:
-                    print("[!] Original LC_LOAD_DYLIB is too short")
-                    print(f"[!] Couldn't fix LC_LOAD_DYLIB of {target_tweak.rpartition('/')[-1]}")
-                    cleanup_and_exit()
-                    return
+                    # if original LC_LOAD_DYLIB is "@rpath/CydiaSubstrate.framework/CydiaSubstrate",
+                    # need to make the new_load_dylib length shorter than the origin one
+                    if "CydiaSubstrate" in hooking_library:
+                        old_inject_lib = "lib/CydiaSubstrate"
+                        new_inject_lib = "lib/CS"
+                        shutil.copytree(old_inject_lib, new_inject_lib)
+                        remove_file_and_rezip("temp.zip", f"{app_resource_dir}/{inject_dir_name}/{old_inject_lib.rpartition('/')[-1]}/")
+                        add_file_to_zip("temp.zip", new_inject_lib, f"{app_resource_dir}/{inject_dir_name}/")
+
+                        new_hooking_library = "CS/CydiaSubstrate"
+                        new_load_dylib = f"@executable_path/{inject_dir_name}/{new_hooking_library}"
+                        size_to_pad = len(old_load_dylib) - len(new_load_dylib)
+                        pad_str = ''.join(["\x00"] * size_to_pad)
+
+                        shutil.rmtree(new_inject_lib)
+                    else:
+                        print("[!] Original LC_LOAD_DYLIB is too short")
+                        print(f"[!] Couldn't fix LC_LOAD_DYLIB of {target_tweak.rpartition('/')[-1]}")
+                        cleanup_and_exit()
+                        return
                 command_load_dylib.name = f"{new_load_dylib}{pad_str}"
                 found_load_dylib = True
                 break
@@ -292,7 +312,6 @@ if __name__ == '__main__':
 
     # select hooking library prompt
     hooking_lib = ["Ellekit", "CydiaSubstrate"]
-    inject_lib = None
     for i in range(len(hooking_lib)):
         print(f"[{i + 1}]. {hooking_lib[i]}")
 
