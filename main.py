@@ -1,11 +1,13 @@
-import re
+import os
+import platform
+import plistlib
 import shutil
+import subprocess
 import sys
 import warnings
 import zipfile
-import plistlib
-import subprocess
-import os
+
+import lief
 
 app_resource_dir = None
 app_bundle_executable = None
@@ -56,6 +58,7 @@ def add_file_to_zip(target_zip: str, file_to_insert: str, target_dir: str):
                 warnings.simplefilter('ignore')
                 zip_ref.write(file_to_insert, arcname=arcname)
             print(f"[*] {file_to_insert} added into {target_zip}")
+            zip_ref.close()
 
 
 def read_plist(target_zip: str) -> None:
@@ -86,7 +89,7 @@ def modify_plist(target_plist: str, UISupportedDevices: bool, MinimumOSVersion: 
             if key in plist_data:
                 del plist_data[key]
                 print(f"[*] {target_plist} key: {key} is removed successfully")
-        
+
         if MinimumOSVersion is True:
             key = "MinimumOSVersion"
             if key in plist_data:
@@ -98,6 +101,35 @@ def modify_plist(target_plist: str, UISupportedDevices: bool, MinimumOSVersion: 
             plistlib.dump(plist_data, File)
 
 
+def remove_file_and_rezip(zip_file_path, file_to_remove):
+    # Create a temporary directory
+    temp_dir = 'temp_unzipped'
+    os.makedirs(temp_dir, exist_ok=True)
+
+    # Unzip the archive
+    with zipfile.ZipFile(zip_file_path, 'r') as zip_ref:
+        zip_ref.extractall(temp_dir)
+
+    # Remove the specified file
+    file_path = os.path.join(temp_dir, file_to_remove)
+    if os.path.exists(file_path):
+        os.remove(file_path)
+
+    # Create a new zip file
+    new_zip_path = zip_file_path.replace('.zip', '_modified.zip')
+    with zipfile.ZipFile(new_zip_path, 'w') as zip_ref:
+        for root, dirs, files in os.walk(temp_dir):
+            for file in files:
+                file_path = os.path.join(root, file)
+                zip_ref.write(file_path, os.path.relpath(file_path, temp_dir))
+
+    # Clean up: remove the temporary directory
+    shutil.rmtree(temp_dir)
+    os.remove(zip_file_path)
+    os.rename(new_zip_path, zip_file_path)
+    os.chmod(zip_file_path, 0o644)
+
+
 def unzip(target_zip: str, target_file: str) -> None:
     # Open the zip file using 'with' statement
     with zipfile.ZipFile(target_zip, 'r') as zip_ref:
@@ -106,75 +138,126 @@ def unzip(target_zip: str, target_file: str) -> None:
             if target_file in file:
                 # Extract the specific file to the current working directory
                 zip_ref.extract(file)
+        zip_ref.close()
 
 
 def ldid_work(target: str, what_work: str) -> None:
     command = None
     log = None
+    ldid_bin = None
+    if platform.system() == "Darwin":
+        ldid_bin = "bin/ldid_macosx_arm64" if platform.machine() == "arm64" else "bin/ldid_macosx_x86_64"
+    elif platform.system() == "Windows":
+        ldid_bin = "bin\ldid_w64_x86_64.exe"
+    elif platform.system() == "Linux":
+        ldid_bin = "bin/ldid_linux_aarch64" if platform.machine() == "arm64" else "bin/ldid_linux_x86_64"
+
     if what_work == 'save':
         log = ['Saved entitlements', 'Failed to save entitlements']
-        # Specify the command you want to run
-        command = f'ldid -e {target} > ent.xml'
+        if platform.system() == "Windows":
+            target = target.replace('/', '\\')
+        command = f'{ldid_bin} -e \"{target}\" > ent.xml'
     elif what_work == 'remove':
         log = ['Removed codesign', 'Failed to remove codesign']
-        command = f'ldid -r {target}'
+        if platform.system() == "Windows":
+            target = target.replace('/', '\\')
+        command = f'{ldid_bin} -r \"{target}\"'
     elif what_work == 'restore':
         log = ['Restored entitlements', 'Failed to restore entitlements']
-        command = f'ldid -S./ent.xml {target}'
+        if platform.system() == "Windows":
+            target = target.replace('/', '\\')
+            command = f'{ldid_bin} -S.\ent.xml \"{target}\"'
+        else:
+            command = f'{ldid_bin} -S./ent.xml \"{target}\"'
     # Execute the command and capture the output
     result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True, text=True)
     # Check the return code to see if the command executed successfully
     if result.returncode == 0:
         print(f"[*] {target.rpartition('/')[-1]} {log[0]} successfully")
     else:
-        print(f"[*] {log[1]} for {target.rpartition('/')[-1]}")
+        print(f"[!] {log[1]} for {target.rpartition('/')[-1]}")
+        cleanup_and_exit()
+        return
 
 
 def insert_dylib(target_executable: str, target_tweak: str):
-    # Specify the command you want to run
-    command = ["insert_dylib", "--inplace", "--no-strip-codesig", f"@executable_path/{inject_dir_name}/{target_tweak}", target_executable]
-    # Execute the command and capture the output
-    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    # Check the return code to see if the command executed successfully
-    if result.returncode == 0:
-        print(f"[*] {target_tweak.rpartition('/')[-1]} inserted successfully")
+    binary = lief.parse(target_executable)
+    if not lief.is_macho(target_executable):
+        print(f"[!] {target_executable} is not Mach-O file")
+        cleanup_and_exit()
+        return
+
+    target_tweak = target_tweak.rpartition('\\')[-1] if platform.system() == "Windows" else \
+    target_tweak.rpartition('/')[-1]
+    library_to_add = f"@executable_path/{inject_dir_name}/{target_tweak}"
+    result = binary.add_library(library_to_add)
+    if result is not None:
+        binary.write(target_executable)
+        print(f"[*] {target_tweak} inserted to {target_executable} successfully")
+        return
     else:
-        print(f"[*] Couldn't insert dylib into {target_executable}")
+        print(f"[!] Couldn't insert dylib into {target_executable}")
+        cleanup_and_exit()
+        return
 
 
-def fix_tweak(target_tweak: str, fix_what: str):
-    command = None
-    if fix_what == 'LC_ID_DYLIB':
-        # Specify the command you want to run
-        command = ["install_name_tool", "-id", f"@executable_path/{inject_dir_name}/{target_tweak.rpartition('/')[-1]}", target_tweak]
-    elif fix_what == 'LC_LOAD_DYLIB':
-        dylib_to_change = ""
-        subcommand = ["otool", "-L", target_tweak]
-        # Execute the subcommand and capture the output to find substrate dylib to change
-        subcommand_result = subprocess.run(subcommand, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        if subcommand_result.returncode == 0:
-            matches = re.findall(r'(/[\w./-]+)', subcommand_result.stdout)
-            # Skipping the first match because it's the name of the main .dylib file
-            for match in matches[1:]:
-                if "substrate" in match.lower():
-                    dylib_to_change = match
-                    break
-            if dylib_to_change == "":
-                print("[*] Failed to find a substrate dylib to change")
+def fix_tweak(target_tweak: str):
+    binary = lief.parse(target_tweak)
+
+    found_id_dylib = False
+    found_load_dylib = False
+    # Find the LC_ID_DYLIB command and modify it
+    for command_id_dylib in binary.commands:
+        if isinstance(command_id_dylib,
+                      lief.MachO.DylibCommand) and command_id_dylib.command == lief.MachO.LOAD_COMMAND_TYPES.ID_DYLIB:
+            old_id_dylib = command_id_dylib.name
+            new_id_dylib = f"@executable_path/{inject_dir_name}/{target_tweak.rpartition('/')[-1]}"
+            size_to_pad = len(old_id_dylib) - len(new_id_dylib)
+            if size_to_pad >= 0:
+                pad_str = ''.join(["\x00"] * size_to_pad)
+            else:
+                print("[!] Original LC_ID_DYLIB is too short")
+                print(f"[!] Couldn't fix LC_ID_DYLIB of {target_tweak.rpartition('/')[-1]}")
                 cleanup_and_exit()
-        else:
-            print(f"[*] Failed to execute subcommand")
-            cleanup_and_exit()
+                return
+            command_id_dylib.name = f"{new_id_dylib}{pad_str}"
+            found_id_dylib = True
+            break
+    # Find the LC_LOAD_DYLIB command and modify it
+    for command_load_dylib in binary.commands:
+        if isinstance(command_load_dylib,
+                      lief.MachO.DylibCommand) and command_load_dylib.command == lief.MachO.LOAD_COMMAND_TYPES.LOAD_DYLIB:
+            if "substrate" in command_load_dylib.name.lower():
+                print(f"[*] Found command {command_load_dylib.name} to fix")
+                old_load_dylib = command_load_dylib.name
+                new_load_dylib = f"@executable_path/{inject_dir_name}/{hooking_library}"
+                size_to_pad = len(old_load_dylib) - len(new_load_dylib)
+                if size_to_pad >= 0:
+                    pad_str = ''.join(["\x00"] * size_to_pad)
+                else:
+                    print("[!] Original LC_LOAD_DYLIB is too short")
+                    print(f"[!] Couldn't fix LC_LOAD_DYLIB of {target_tweak.rpartition('/')[-1]}")
+                    cleanup_and_exit()
+                    return
+                command_load_dylib.name = f"{new_load_dylib}{pad_str}"
+                found_load_dylib = True
+                break
 
-        command = ["install_name_tool", "-change", dylib_to_change,
-                   f"@executable_path/{inject_dir_name}/{hooking_library}", target_tweak]
-    # Execute the command and capture the output
-    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    # Check the return code to see if the command executed successfully
-    if result.returncode == 0:
-        print(f"[*] {target_tweak.rpartition('/')[-1]} {fix_what} fixed successfully")
+    if not found_id_dylib:
+        print("[!] LC_ID_DYLIB command not found.")
+        print(f"[!] Couldn't fix LC_ID_DYLIB of {target_tweak.rpartition('/')[-1]}")
+        cleanup_and_exit()
+        return
+    elif not found_load_dylib:
+        print("[!] Failed to find a substrate dylib to change")
+        print(f"[!] Couldn't fix LC_LOAD_DYLIB of {target_tweak.rpartition('/')[-1]}")
+        cleanup_and_exit()
+        return
     else:
-        print(f"[*] Couldn't fix {fix_what} of {target_tweak.rpartition('/')[-1]}")
+        # Save the modified binary
+        binary.write(target_tweak)
+        print(f"[*] {target_tweak.rpartition('/')[-1]} LC_ID_DYLIB, LC_LOAD_DYLIB has been updated.")
+        print(f"[*] {target_tweak.rpartition('/')[-1]} fixed successfully")
 
 
 if __name__ == '__main__':
@@ -208,7 +291,7 @@ if __name__ == '__main__':
     inject_dir_name = "mlinject"
 
     # select hooking library prompt
-    hooking_lib = ["CydiaSubstrate", "Ellekit"]
+    hooking_lib = ["Ellekit", "CydiaSubstrate"]
     inject_lib = None
     for i in range(len(hooking_lib)):
         print(f"[{i + 1}]. {hooking_lib[i]}")
@@ -218,8 +301,8 @@ if __name__ == '__main__':
         if num.isdigit() and 1 <= int(num) <= 2:
             inject_lib = hooking_lib[int(num) - 1]
             if inject_lib == "CydiaSubstrate":
-                inject_lib = "lib/CydiaSubstrate.framework"
-                hooking_library = "CydiaSubstrate.framework/CydiaSubstrate"
+                inject_lib = "lib/CydiaSubstrate"
+                hooking_library = "CydiaSubstrate/CydiaSubstrate"
             elif inject_lib == "Ellekit":
                 inject_lib = "lib/libellekit.dylib"
                 hooking_library = "libellekit.dylib"
@@ -249,11 +332,14 @@ if __name__ == '__main__':
     print("")
     for targetTweak in targetTweaks:
         print(f"[*] {targetTweak.rpartition('/')[-1]} injection start")
+        print("")
     # create temp zip file
     temp_zip_file = "temp.zip"
     if shutil.copy2(targetZip, temp_zip_file) is not None:
-        print("[*] Temporarily zip file created")
-    else: print("[!] Couldn't create temporarily zip file")
+        print(f"[*] Temporarily zip file \"{temp_zip_file}\" created")
+        print("")
+    else:
+        print("[!] Couldn't create temporarily zip file")
 
     # read Info.plist to get some infos
     read_plist(temp_zip_file)
@@ -262,21 +348,31 @@ if __name__ == '__main__':
     info_plist_file = f"{app_resource_dir}/Info.plist"
     unzip(temp_zip_file, info_plist_file)
     modify_plist(info_plist_file, UISupportedDevices_ans, MinimumOSVersion_ans)
+    remove_file_and_rezip(temp_zip_file, info_plist_file)
     add_file_to_zip(temp_zip_file, info_plist_file, f"{app_resource_dir}")
+    print("")
 
     # work for app's main executable
     app_main_executable = f"{app_resource_dir}/{app_bundle_executable}"
+
     unzip(temp_zip_file, app_main_executable)
     # save entitlements of the app's main executable
     ldid_work(app_main_executable, "save")
     # remove code signature of the app's main executable
     ldid_work(app_main_executable, "remove")
+    print("")
+
     # Insert dylib into the app's main executable and add the file to the zip
     for targetTweak in targetTweaks:
-        insert_dylib(app_main_executable, targetTweak.rpartition('/')[-1])
+        insert_dylib(app_main_executable, targetTweak)
+    print("")
+
     # restore entitlements of the app's main executable
     ldid_work(app_main_executable, "restore")
+    if platform.system() == "Windows":
+        remove_file_and_rezip(temp_zip_file, app_main_executable)
     add_file_to_zip(temp_zip_file, app_main_executable, f"{app_resource_dir}")
+    print("")
 
     # create hooking lib dir in the zip file
     hooking_lib_dir_to_make = f"{app_resource_dir}/{inject_dir_name}/"
@@ -288,17 +384,27 @@ if __name__ == '__main__':
         add_file_to_zip(temp_zip_file, targetTweak, hooking_lib_dir_to_make)
     # unzip it
     unzip(temp_zip_file, f"{hooking_lib_dir_to_make}")
+    print("")
 
     for targetTweak in targetTweaks:
+        if platform.system() == "Windows":
+            targetTweak = targetTweak.rpartition('\\')[-1]
+        else:
+            targetTweak = targetTweak.rpartition('/')[-1]
         # remove code signature of the tweak dylib
-        ldid_work(f"{hooking_lib_dir_to_make}{targetTweak.rpartition('/')[-1]}", "remove")
+        ldid_work(f"{hooking_lib_dir_to_make}{targetTweak}", "remove")
         # fix LC_ID_DYLIB, LO_LOAD_DYLIB of the tweak dylib
-        fix_tweak(f"{hooking_lib_dir_to_make}{targetTweak.rpartition('/')[-1]}", "LC_ID_DYLIB")
-        fix_tweak(f"{hooking_lib_dir_to_make}{targetTweak.rpartition('/')[-1]}", "LC_LOAD_DYLIB")
+        fix_tweak(f"{hooking_lib_dir_to_make}{targetTweak}")
+        # remove the tweak dylib before adding the fixed tweak dylib in the zip file
+        if platform.system() == "Windows":
+            remove_file_and_rezip(temp_zip_file, f"{hooking_lib_dir_to_make}{targetTweak}")
         # add the fixed tweak in the zip file
-        add_file_to_zip(temp_zip_file, f"{hooking_lib_dir_to_make}{targetTweak.rpartition('/')[-1]}", hooking_lib_dir_to_make)
+        add_file_to_zip(temp_zip_file, f"{hooking_lib_dir_to_make}{targetTweak}", hooking_lib_dir_to_make)
+    print("")
 
-    shutil.move(temp_zip_file, f"{app_bundle_executable}_v{app_version}_injected.ipa")
+    out = f"{app_bundle_executable}_v{app_version}_injected.ipa"
+    shutil.move(temp_zip_file, out)
+    print(f"[*] Injection Done! {out}")
 
     # clean up
     cleanup_and_exit()
