@@ -10,12 +10,17 @@ Because this tool simply perform the following steps<br>
 7. Change LC_LOAD_DYLIB of the tweak with our hooking library
 8. Move the modified items(executable, tweak, hooking lib) into the zip
 
+# Prerequisite
+Python > 3.8.0
+
 # Usage
-Git clone this repo<br>
+git clone https://github.com/hackcatml/mlinject.git<br>
+cd mlinject<br>
 pip install -r requirements.txt<br>
 python main.py<br>
+
 follow the instruction prompts<br>
-It will inject CydiaSubstrate or [libellekit.dylib](https://github.com/evelyneee/ellekit) as a hooking library
+It will inject [ellekit](https://github.com/evelyneee/ellekit) or CydiaSubstrate as a hooking library
 
 # Credits
 [Azule](https://github.com/Al4ise/Azule)<br>
